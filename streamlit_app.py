@@ -216,63 +216,117 @@ def create_prompt(user_question):
     """
     Create a robust, grounded RAG prompt in Indonesian.
     
-    *** THIS FUNCTION IS NOW REFACTORED ***
-    It no longer contains the [INST] templates.
-    It now only fetches and formats the DATA contexts (policy and patient)
-    to be sent to a Cortex Agent.
+    *** THIS FUNCTION IS NOW MODIFIED ***
+    It now accepts a second, optional context from an
+    uploaded patient file.
 
     Args:
         user_question (str): The user's question.
 
     Returns:
-        tuple: The generated prompt data string and the search results for citation.
+        tuple: The generated prompt string and the search results for citation.
     """
     
-    # 1. Retrieve Policy Context (from Cortex Search) - UNCHANGED
+    # 1. Retrieve Policy Context (from Cortex Search)
     policy_context, results = query_cortex_search_service(user_question)
     
-    # --- 2. Retrieve Patient Context (from File Uploader) ---
-    patient_context_str = "" # Default to empty string
+    # --- 2. NEW: Retrieve Patient Context (from File Uploader) ---
+    patient_context = "" # Default to empty string
     uploaded_file = st.session_state.get("patient_file_uploader")
     
     if uploaded_file:
         # Use our new helper function to get the text
-        patient_text = get_text_from_uploaded_pdf(uploaded_file)
+        patient_context = get_text_from_uploaded_pdf(uploaded_file)
         
         # Add headers for the LLM to understand
-        # This string must match what the Agent's instructions expect
-        patient_context_str = f"""
-        <PATIENT_CONTEXT>
-        Ini adalah laporan medis pasien yang diunggah:
-        {patient_text}
-        </PATIENT_CONTEXT>
+        patient_context = f"""
+            <PATIENT_CONTEXT>
+            Ini adalah laporan medis pasien yang diunggah:
+            {patient_context}
+            </PATIENT_CONTEXT>
         """
         
-    # --- 3. REMOVED: All prompt_templates and current_task logic ---
-    # The [INST] instructions now live inside the Cortex Agents.
+    # 3. Get the current task from the session state
+    current_task = st.session_state.get("current_task", "general")
 
-    # 4. NEW: Build the simple DATA-ONLY prompt
-    # This string contains only the dynamic data we are sending to the agent.
-    # The agent's System Prompt (instructions) will be automatically prepended by Snowflake.
-    final_prompt = f"""
-    <POLICY_CONTEXT>
-    {policy_context}
-    </POLICY_CONTEXT>
-    {patient_context_str}
+    # 4. Define our new DUAL-CONTEXT prompt templates
+    #    (Each template is updated to include the {patient_context})
+    prompt_templates = {
+        "general": f"""
+        [INST]
+        Anda adalah asisten cerdas yang bertugas menjawab pertanyaan tentang polis asuransi.
+        Tugas Anda adalah:
+        1. Jawablah PERTANYAAN user menggunakan <POLICY_CONTEXT>.
+        2. Jika <PATIENT_CONTEXT> disediakan, gunakan itu untuk informasi tambahan tentang pasien.
+        3. Jawablah HANYA berdasarkan informasi yang disediakan.
+        4. Jika <POLICY_CONTEXT> tidak berisi jawaban, jawablah "Informasi tidak ditemukan dalam dokumen polis."
+        
+        <POLICY_CONTEXT>
+        {policy_context}
+        </POLICY_CONTEXT>
+        {patient_context}
+        
+        <PERTANYAAN>
+        {user_question}
+        </PERTANYAAN>
+        [/INST]
+        Jawaban:
+        """,
+                
+                "coverage": f"""
+        [INST]
+        Anda adalah asisten analis perlindungan (coverage) asuransi.
+        Tugas Anda adalah menentukan apakah prosedur pasien DITANGGUNG atau TIDAK DITANGGUNG.
+        1. Periksa <PATIENT_CONTEXT> untuk menemukan prosedur medis yang dijalani pasien (jika ada).
+        2. Periksa <POLICY_CONTEXT> untuk menentukan apakah prosedur tersebut ditanggung.
+        3. Jawab HANYA dengan "DITANGGUNG" atau "TIDAK DITANGGUNG" atau "TIDAK DISEBUTKAN".
+        4. Jika <CONTEXT> menyebutkan syarat, Anda tetap harus menjawab "DITANGGUNG", lalu berikan penjelasan singkat.
+        
+        <POLICY_CONTEXT>
+        {policy_context}
+        </POLICY_CONTEXT>
+        {patient_context}
+        
+        <PERTANYAAN>
+        {user_question}
+        </PERTANYAAN>
+        [/INST]
+        Jawaban:
+        """,
+                
+                "copay": f"""
+        [INST]
+        Anda adalah asisten ekstraksi data keuangan.
+        Tugas Anda adalah menemukan jumlah biaya (co-payment, iuran, deductible).
+        1. Gunakan <POLICY_CONTEXT> untuk menemukan jumlah biaya.
+        2. Gunakan <PATIENT_CONTEXT> untuk mengidentifikasi prosedur yang ditanyakan.
+        3. Jika <POLICY_CONTEXT> tidak menyebutkan biaya spesifik, jawablah "Informasi biaya tidak ditemukan."
+        4. JANGAN membuat kalimat panjang. Berikan jawaban yang spesifik.
+        
+        <POLICY_CONTEXT>
+        {policy_context}
+        </POLICY_CONTEXT>
+        {patient_context}
+        
+        <PERTANYAAN>
+        {user_question}
+        </PERTANYAAN>
+        [/INST]
+        Jawaban:
+        """
+    }
+
+    # 5. Select the correct prompt (unchanged)
+    final_prompt = prompt_templates.get(current_task, prompt_templates["general"])
     
-    <PERTANYAAN>
-    {user_question}
-    </PERTANYAAN>
-    """
-    
-    # 5. Debugging (Updated to show the new simple prompt)
+    # 6. Debugging (Updated to show both contexts)
     if st.session_state.debug:
-        st.sidebar.subheader("Full Prompt to Agent (Debug)")
+        st.sidebar.subheader("Full LLM Prompt (Debug)")
         if uploaded_file:
              st.sidebar.caption("Patient Context (from PDF):")
-             st.sidebar.text_area("Patient Context", patient_context_str, height=150)
-        st.sidebar.caption("Final Data String to Agent:")
-        st.sidebar.text_area("LLM Prompt Data", final_prompt, height=400)
+             st.sidebar.text_area("Patient Context", patient_context, height=150)
+        st.sidebar.caption("Final Prompt to LLM:")
+        st.sidebar.text_area("LLM Prompt", final_prompt, height=400)
 
     return final_prompt, results
     
@@ -353,50 +407,34 @@ def main():
         with st.chat_message(message["role"], avatar=icons[message["role"]]):
             st.markdown(message["content"])
 
-    # Old KYHP
     # Initialize the task state
-    # if "current_task" not in st.session_state:
-    #     st.session_state.current_task = "general" # Default to general questions
+    if "current_task" not in st.session_state:
+        st.session_state.current_task = "general" # Default to general questions
 
-    if "current_agent_name" not in st.session_state:
-        # NOTE: Update "GENERAL_AGENT" if you named yours differently
-        st.session_state.current_agent_name = "GENERAL_AGENT"
-
-    # Task selection buttons, replaced to adjust for Snowflake Agents
+    # Task selection buttons
     st.write("Pilih jenis pertanyaan (Select question type):")
     cols = st.columns(3)
     with cols[0]:
         if st.button("Pertanyaan Umum (General)", use_container_width=True):
-            st.session_state.current_agent_name = "GENERAL_AGENT"
+            st.session_state.current_task = "general"
     with cols[1]:
         if st.button("Cek Perlindungan (Check Coverage)", use_container_width=True):
-            st.session_state.current_agent_name = "COVERAGE_AGENT"
+            st.session_state.current_task = "coverage"
     with cols[2]:
         if st.button("Cari Co-Pay/Biaya (Find Co-Pay)", use_container_width=True):
-            st.session_state.current_agent_name = "COPAY_AGENT"
+            st.session_state.current_task = "copay"
 
     # Dynamic chat input placeholder
-    # task_placeholders = {
-    #     "general": "Tanyakan sesuatu tentang polis asuransi...",
-    #     "coverage": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
-    #     "copay": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
-    # }
-    # placeholder_text = task_placeholders.get(
-    #     st.session_state.current_task, 
-    #     task_placeholders["general"]
-    # )
-
-    # This is new for the Snowflake Agent
     task_placeholders = {
-        "GENERAL_AGENT": "Tanyakan sesuatu tentang polis asuransi...",
-        "COVERAGE_AGENT": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
-        "COPAY_AGENT": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
+        "general": "Tanyakan sesuatu tentang polis asuransi...",
+        "coverage": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
+        "copay": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
     }
     placeholder_text = task_placeholders.get(
-        st.session_state.current_agent_name, 
-        task_placeholders["GENERAL_AGENT"]
+        st.session_state.current_task, 
+        task_placeholders["general"]
     )
-
+    
     # Input for new question
     if question := st.chat_input(placeholder_text, key="chat_input_box"):
         
