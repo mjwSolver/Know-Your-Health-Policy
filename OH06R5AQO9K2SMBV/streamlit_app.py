@@ -407,34 +407,50 @@ def main():
         with st.chat_message(message["role"], avatar=icons[message["role"]]):
             st.markdown(message["content"])
 
+    # Old KYHP
     # Initialize the task state
-    if "current_task" not in st.session_state:
-        st.session_state.current_task = "general" # Default to general questions
+    # if "current_task" not in st.session_state:
+    #     st.session_state.current_task = "general" # Default to general questions
 
-    # Task selection buttons
+    if "current_agent_name" not in st.session_state:
+        # NOTE: Update "GENERAL_AGENT" if you named yours differently
+        st.session_state.current_agent_name = "GENERAL_AGENT"
+
+    # Task selection buttons, replaced to adjust for Snowflake Agents
     st.write("Pilih jenis pertanyaan (Select question type):")
     cols = st.columns(3)
     with cols[0]:
         if st.button("Pertanyaan Umum (General)", use_container_width=True):
-            st.session_state.current_task = "general"
+            st.session_state.current_agent_name = "GENERAL_AGENT"
     with cols[1]:
         if st.button("Cek Perlindungan (Check Coverage)", use_container_width=True):
-            st.session_state.current_task = "coverage"
+            st.session_state.current_agent_name = "COVERAGE_AGENT"
     with cols[2]:
         if st.button("Cari Co-Pay/Biaya (Find Co-Pay)", use_container_width=True):
-            st.session_state.current_task = "copay"
+            st.session_state.current_agent_name = "COPAY_AGENT"
 
     # Dynamic chat input placeholder
+    # task_placeholders = {
+    #     "general": "Tanyakan sesuatu tentang polis asuransi...",
+    #     "coverage": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
+    #     "copay": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
+    # }
+    # placeholder_text = task_placeholders.get(
+    #     st.session_state.current_task, 
+    #     task_placeholders["general"]
+    # )
+
+    # This is new for the Snowflake Agent
     task_placeholders = {
-        "general": "Tanyakan sesuatu tentang polis asuransi...",
-        "coverage": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
-        "copay": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
+        "GENERAL_AGENT": "Tanyakan sesuatu tentang polis asuransi...",
+        "COVERAGE_AGENT": "Masukkan nama prosedur atau perawatan (e.g., 'operasi usus buntu')...",
+        "COPAY_AGENT": "Masukkan nama prosedur untuk cek biaya (e.g., 'kamar rawat inap')..."
     }
     placeholder_text = task_placeholders.get(
-        st.session_state.current_task, 
-        task_placeholders["general"]
+        st.session_state.current_agent_name, 
+        task_placeholders["GENERAL_AGENT"]
     )
-    
+
     # Input for new question
     if question := st.chat_input(placeholder_text, key="chat_input_box"):
         
